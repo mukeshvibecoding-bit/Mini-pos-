@@ -1,0 +1,1681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Mobile Retail POS Scanner</title>
+  <!-- Load ZXing Barcode Library for universal cross-browser/cross-device barcode decoding -->
+  <script src="https://unpkg.com/@zxing/library@0.19.2"></script>
+  <style>
+    :root {
+      --primary: #10b981;
+      --primary-dark: #059669;
+      --accent: #2563eb;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --bg-dark: #0a0e17;
+      --surface-dark: #161e2e;
+      --surface-glass: rgba(22, 30, 46, 0.88);
+      --text-main: #f9fafb;
+      --text-muted: #9ca3af;
+      --border-dark: rgba(255, 255, 255, 0.12);
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* Full-screen Scanner Viewport */
+    #scanner-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      background: #000;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    video#camera-feed {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 1;
+    }
+
+    /* Top Action Bar (One-handed reach / Safe Area) */
+    .top-bar {
+      position: absolute;
+      top: var(--safe-top);
+      left: 0;
+      right: 0;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 20;
+      background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
+    }
+
+    .top-btn {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.18);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 18px;
+      transition: all 0.2s;
+    }
+
+    .top-btn:active {
+      transform: scale(0.92);
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    .top-btn.active {
+      background: #f59e0b;
+      color: #000;
+      box-shadow: 0 0 16px rgba(245, 158, 11, 0.6);
+    }
+
+    .scanner-title-badge {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .scanner-title-badge h1 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: #fff;
+    }
+
+    .network-badge {
+      font-size: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-top: 3px;
+      font-weight: 700;
+      background: rgba(16, 185, 129, 0.2);
+      color: #10b981;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+    }
+
+    .network-badge.offline {
+      background: rgba(239, 68, 68, 0.25);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+
+    .network-badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* Optical Target Frame Overlay */
+    .scanner-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .viewfinder {
+      position: relative;
+      width: 290px;
+      height: 180px;
+      box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.58);
+      border-radius: 18px;
+      overflow: hidden;
+      transition: all 0.25s ease;
+    }
+
+    .viewfinder.detecting {
+      box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.7);
+    }
+
+    .viewfinder.success-flash {
+      box-shadow: 0 0 0 4000px rgba(16, 185, 129, 0.35);
+      border: 2px solid var(--primary);
+    }
+
+    /* Target Reticles (Corner Brackets) */
+    .corner {
+      position: absolute;
+      width: 26px;
+      height: 26px;
+      border-color: #3b82f6;
+      border-style: solid;
+      pointer-events: none;
+      transition: border-color 0.2s;
+    }
+
+    .viewfinder.success-flash .corner {
+      border-color: var(--primary) !important;
+    }
+
+    .corner.tl { top: 0; left: 0; border-width: 4px 0 0 4px; border-top-left-radius: 12px; }
+    .corner.tr { top: 0; right: 0; border-width: 4px 4px 0 0; border-top-right-radius: 12px; }
+    .corner.bl { bottom: 0; left: 0; border-width: 0 0 4px 4px; border-bottom-left-radius: 12px; }
+    .corner.br { bottom: 0; right: 0; border-width: 0 4px 4px 0; border-bottom-right-radius: 12px; }
+
+    /* Laser Scanning Bar Animation */
+    .laser-line {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 2.5px;
+      background: linear-gradient(90deg, transparent 0%, #3b82f6 50%, transparent 100%);
+      box-shadow: 0 0 12px #3b82f6, 0 0 4px #60a5fa;
+      animation: scanSweep 2.2s ease-in-out infinite alternate;
+    }
+
+    @keyframes scanSweep {
+      0% { transform: translateY(10px); }
+      100% { transform: translateY(170px); }
+    }
+
+    .laser-line.paused {
+      animation-play-state: paused;
+      opacity: 0.2;
+    }
+
+    /* Instructional helper below frame */
+    .frame-hint {
+      margin-top: 18px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.85);
+      background: rgba(0, 0, 0, 0.65);
+      padding: 6px 14px;
+      border-radius: 20px;
+      backdrop-filter: blur(8px);
+      letter-spacing: 0.3px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      pointer-events: auto;
+    }
+
+    /* Simulator Test Strip (Quick Testing for Laptops / Desktops / Reviewers) */
+    .quick-test-strip {
+      position: absolute;
+      top: 76px;
+      left: 12px;
+      right: 12px;
+      z-index: 18;
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      scrollbar-width: none;
+    }
+    .quick-test-strip::-webkit-scrollbar { display: none; }
+
+    .test-pill {
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #e2e8f0;
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: 12px;
+      white-space: nowrap;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      transition: all 0.15s;
+    }
+    .test-pill:hover, .test-pill:active {
+      background: rgba(37, 99, 235, 0.8);
+      border-color: #3b82f6;
+    }
+
+    /* Bottom Control & Cart Tray Area */
+    .bottom-zone {
+      position: absolute;
+      bottom: var(--safe-bottom);
+      left: 0;
+      right: 0;
+      z-index: 25;
+      padding: 0 16px 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    .bottom-zone > * {
+      pointer-events: auto;
+    }
+
+    /* Status Pill */
+    .status-badge-container {
+      display: flex;
+      justify-content: center;
+    }
+
+    .status-badge {
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: 20px;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #94a3b8;
+      backdrop-filter: blur(10px);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .status-badge .status-led {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #10b981;
+    }
+
+    /* Floating Cart Peek Drawer Bar */
+    .cart-peek-bar {
+      background: var(--surface-glass);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid var(--border-dark);
+      border-radius: 16px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      cursor: pointer;
+    }
+
+    .cart-peek-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .cart-icon-bubble {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      position: relative;
+    }
+
+    .cart-count-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      background: #ef4444;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      min-width: 18px;
+      height: 18px;
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 4px;
+      border: 2px solid var(--surface-dark);
+    }
+
+    .cart-total-info h4 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+
+    .cart-total-info .cart-amount {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .cart-action-btn {
+      background: var(--primary);
+      color: #042f2e;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Bottom Quick Action Strip (Manual Keypad, Simulators) */
+    .aux-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .aux-btn {
+      flex: 1;
+      background: rgba(22, 30, 46, 0.75);
+      border: 1px solid var(--border-dark);
+      backdrop-filter: blur(10px);
+      color: #d1d5db;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 9px 12px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .aux-btn:active {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    /* Product Result Bottom Sheet (Confirmation Toast / Sheet) */
+    .result-sheet {
+      position: absolute;
+      bottom: calc(var(--safe-bottom) + 80px);
+      left: 16px;
+      right: 16px;
+      z-index: 30;
+      background: #0f172a;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      border-radius: 20px;
+      padding: 14px 16px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.8), 0 0 20px rgba(16, 185, 129, 0.2);
+      transform: translateY(140%);
+      opacity: 0;
+      transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      pointer-events: auto;
+    }
+
+    .result-sheet.visible {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .result-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .result-status-tag {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .barcode-snip {
+      font-size: 11px;
+      font-family: monospace;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .result-body {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+
+    .result-product-name {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 3px;
+      max-width: 68%;
+      line-height: 1.25;
+    }
+
+    .result-pricing {
+      text-align: right;
+    }
+
+    .result-price {
+      font-size: 19px;
+      font-weight: 800;
+      color: var(--primary);
+    }
+
+    .result-mrp {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-decoration: line-through;
+    }
+
+    .result-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 12px;
+    }
+
+    .result-stock-indicator {
+      color: #94a3b8;
+    }
+
+    .result-added-pill {
+      background: rgba(16, 185, 129, 0.18);
+      color: #34d399;
+      font-weight: 600;
+      font-size: 11px;
+      padding: 3px 9px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Dialog Modals (Permission, Not Found, Out of Stock, Manual Entry) */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .dialog-card {
+      background: #111827;
+      border: 1px solid var(--border-dark);
+      border-radius: 22px;
+      width: 100%;
+      max-width: 360px;
+      padding: 24px;
+      text-align: center;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+    }
+
+    .dialog-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      margin: 0 auto 16px auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+    }
+
+    .dialog-icon.danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+    .dialog-icon.warning { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+    .dialog-icon.info { background: rgba(37, 99, 235, 0.15); color: #60a5fa; }
+
+    .dialog-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+
+    .dialog-desc {
+      font-size: 13px;
+      color: #94a3b8;
+      line-height: 1.5;
+      margin-bottom: 20px;
+    }
+
+    .dialog-barcode-box {
+      background: #030712;
+      border: 1px dashed rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 16px;
+      letter-spacing: 1.5px;
+      color: #f59e0b;
+      margin-bottom: 20px;
+    }
+
+    .dialog-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .btn-main {
+      width: 100%;
+      padding: 12px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: opacity 0.15s;
+    }
+    .btn-main:active { opacity: 0.85; }
+
+    .btn-primary { background: var(--primary); color: #022c22; }
+    .btn-warning { background: var(--warning); color: #451a03; }
+    .btn-secondary { background: rgba(255, 255, 255, 0.1); color: #fff; }
+    .btn-outline { background: transparent; border: 1px solid rgba(255, 255, 255, 0.2); color: #cbd5e1; }
+
+    /* Cart Full Review Drawer */
+    #cart-drawer-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(8px);
+      display: none;
+      flex-direction: column;
+      justify-content: flex-end;
+    }
+
+    #cart-drawer-modal.open {
+      display: flex;
+    }
+
+    .cart-drawer-content {
+      background: #111827;
+      border-top-left-radius: 24px;
+      border-top-right-radius: 24px;
+      border-top: 1px solid var(--border-dark);
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 16px calc(20px + var(--safe-bottom)) 16px;
+    }
+
+    .drawer-handle {
+      width: 44px;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+      margin: 0 auto 14px auto;
+    }
+
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .drawer-header h3 {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .cart-items-list {
+      flex: 1;
+      overflow-y: auto;
+      max-height: 320px;
+      margin-bottom: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .cart-item-row {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .cart-item-details h5 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .cart-item-details p {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .qty-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .qty-btn {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.12);
+      border: none;
+      color: #fff;
+      font-size: 15px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .qty-value {
+      font-size: 14px;
+      font-weight: 700;
+      min-width: 20px;
+      text-align: center;
+    }
+
+    .cart-summary-box {
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 13px;
+    }
+
+    .summary-line {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+    }
+
+    .summary-line.total {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding-top: 6px;
+      margin-top: 2px;
+    }
+
+    .manual-input-box {
+      width: 100%;
+      background: #030712;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      padding: 14px;
+      color: #fff;
+      font-size: 18px;
+      font-family: monospace;
+      letter-spacing: 2px;
+      text-align: center;
+      margin-bottom: 16px;
+      outline: none;
+    }
+
+    .manual-input-box:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.3);
+    }
+
+    /* Sound Synthesizer Indicator */
+    .audio-ping { display: none; }
+  </style>
+</head>
+<body>
+
+  <!-- Fullscreen Camera Scanner Container -->
+  <div id="scanner-container">
+    <!-- Real-time Rear Camera Feed -->
+    <video id="camera-feed" autoplay playsinline muted></video>
+
+    <!-- Top Navigation & Controls -->
+    <header class="top-bar">
+      <button class="top-btn" id="btn-back" title="Close Scanner" onclick="simulateCloseApp()">✕</button>
+      
+      <div class="scanner-title-badge">
+        <h1>POS Scanner</h1>
+        <div class="network-badge" id="net-badge" onclick="toggleOnlineStatus()">
+          <span class="dot"></span>
+          <span id="net-text">ONLINE</span>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 8px;">
+        <button class="top-btn" id="btn-camera-switch" title="Switch Camera" onclick="toggleCameraFacing()">🔄</button>
+        <button class="top-btn" id="btn-torch" title="Flashlight Torch" onclick="toggleTorch()">⚡</button>
+      </div>
+    </header>
+
+    <!-- Quick Barcode Simulation Bar for fast desktop/laptop testing -->
+    <div class="quick-test-strip" title="Click any item to simulate barcode detection">
+      <div class="test-pill" onclick="triggerBarcodeLookup('8901262010014', 'EAN-13')">🥛 Amul Milk (₹68)</div>
+      <div class="test-pill" onclick="triggerBarcodeLookup('8901058852449', 'EAN-13')">🍜 Maggi (₹14)</div>
+      <div class="test-pill" onclick="triggerBarcodeLookup('8901719101037', 'EAN-13')">🍪 Parle-G (₹10)</div>
+      <div class="test-pill" onclick="triggerBarcodeLookup('5449000000996', 'EAN-13')">🥤 Coca-Cola (₹40)</div>
+      <div class="test-pill" onclick="triggerBarcodeLookup('8901233020000', 'EAN-13')">⚠️ Out of Stock</div>
+      <div class="test-pill" onclick="triggerBarcodeLookup('8909999999999', 'EAN-13')">❓ Unknown Item</div>
+    </div>
+
+    <!-- Center Scanning Target Reticle & Laser -->
+    <div class="scanner-overlay">
+      <div class="viewfinder" id="viewfinder">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+        <div class="laser-line" id="laser-line"></div>
+      </div>
+      <div class="frame-hint" id="frame-hint">
+        <span>📷 Align barcode inside the frame</span>
+      </div>
+    </div>
+
+    <!-- Product Found Quick Confirmation Toast (Non-blocking continuous flow) -->
+    <div class="result-sheet" id="result-sheet">
+      <div class="result-header">
+        <div class="result-status-tag">✓ Product Found</div>
+        <div class="barcode-snip" id="result-barcode-tag">8901262010014</div>
+      </div>
+      <div class="result-body">
+        <div class="result-product-name" id="result-pname">Amul Taaza Milk 1L</div>
+        <div class="result-pricing">
+          <div class="result-price" id="result-pprice">₹68.00</div>
+          <div class="result-mrp" id="result-pmrp">MRP ₹70.00</div>
+        </div>
+      </div>
+      <div class="result-footer">
+        <div class="result-stock-indicator" id="result-pstock">Stock: 24</div>
+        <div class="result-added-pill" id="result-added-text">✓ Added to Cart (Qty 1)</div>
+      </div>
+    </div>
+
+    <!-- Bottom Action & Cart Peek Area -->
+    <div class="bottom-zone">
+      <!-- Status Badge -->
+      <div class="status-badge-container">
+        <div class="status-badge" id="status-pill">
+          <div class="status-led" id="status-led"></div>
+          <span id="status-text">Ready to Scan</span>
+        </div>
+      </div>
+
+      <!-- Live Cart Bottom Peek Drawer -->
+      <div class="cart-peek-bar" onclick="openCartDrawer()">
+        <div class="cart-peek-info">
+          <div class="cart-icon-bubble">
+            🛒
+            <span class="cart-count-badge" id="cart-item-count">0</span>
+          </div>
+          <div class="cart-total-info">
+            <h4>Current Bill</h4>
+            <div class="cart-amount" id="cart-total-amount">₹0.00</div>
+          </div>
+        </div>
+        <button class="cart-action-btn">
+          View Cart →
+        </button>
+      </div>
+
+      <!-- Auxiliary Bar (Manual Barcode Entry & Simulation) -->
+      <div class="aux-controls">
+        <button class="aux-btn" onclick="openManualInputModal()">
+          ⌨️ Enter Barcode Manually
+        </button>
+        <button class="aux-btn" onclick="clearCart()">
+          🗑️ Clear Cart
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Camera Permission Denied / Prompt -->
+  <div class="modal-backdrop" id="modal-permission">
+    <div class="dialog-card">
+      <div class="dialog-icon info">📹</div>
+      <h3 class="dialog-title">Camera Access Required</h3>
+      <p class="dialog-desc" id="perm-desc">
+        Allow camera access to scan retail product barcodes directly from your phone.
+      </p>
+      <div class="dialog-actions">
+        <button class="btn-main btn-primary" onclick="initCameraStream()">Allow Camera</button>
+        <button class="btn-main btn-secondary" onclick="openManualInputModal()">Enter Barcode Manually</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Product Not Found -->
+  <div class="modal-backdrop" id="modal-not-found">
+    <div class="dialog-card">
+      <div class="dialog-icon warning">🔍</div>
+      <h3 class="dialog-title">Product Not Found</h3>
+      <p class="dialog-desc">This barcode is not registered in the POS store inventory.</p>
+      <div class="dialog-barcode-box" id="nf-barcode-display">8909999999999</div>
+      <div class="dialog-actions">
+        <button class="btn-main btn-warning" onclick="handleCreateProductFromUnknown()">+ Create Product</button>
+        <button class="btn-main btn-secondary" onclick="openManualInputModal()">Search Catalog</button>
+        <button class="btn-main btn-outline" onclick="closeModalAndResume('modal-not-found')">Scan Again</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Out of Stock Warning -->
+  <div class="modal-backdrop" id="modal-oos">
+    <div class="dialog-card">
+      <div class="dialog-icon danger">⚠️</div>
+      <h3 class="dialog-title">Out of Stock</h3>
+      <p class="dialog-desc" id="oos-desc">Product has 0 inventory left in this store location.</p>
+      <div class="dialog-barcode-box" id="oos-product-box">Tata Salt 1kg - ₹28.00</div>
+      <div class="dialog-actions">
+        <button class="btn-main btn-warning" onclick="confirmAddOosAnyway()">Add Anyway (Override)</button>
+        <button class="btn-main btn-outline" onclick="closeModalAndResume('modal-oos')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Manual Barcode / Quick Create Entry -->
+  <div class="modal-backdrop" id="modal-manual">
+    <div class="dialog-card">
+      <div class="dialog-icon info">🔢</div>
+      <h3 class="dialog-title" id="manual-modal-title">Manual Barcode</h3>
+      <p class="dialog-desc">Type the 8, 12, or 13 digit number from product packaging.</p>
+      <input type="number" pattern="[0-9]*" class="manual-input-box" id="manual-barcode-input" placeholder="e.g. 8901262010014" autofocus />
+      <div class="dialog-actions">
+        <button class="btn-main btn-primary" onclick="submitManualBarcode()">Lookup & Add</button>
+        <button class="btn-main btn-outline" onclick="closeModalAndResume('modal-manual')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Full Cart Bill Drawer -->
+  <div id="cart-drawer-modal" onclick="onCartBackdropClick(event)">
+    <div class="cart-drawer-content" onclick="event.stopPropagation()">
+      <div class="drawer-handle"></div>
+      <div class="drawer-header">
+        <h3>Current POS Cart</h3>
+        <button class="top-btn" onclick="closeCartDrawer()" style="width:32px; height:32px; font-size:14px;">✕</button>
+      </div>
+
+      <div class="cart-items-list" id="cart-items-container">
+        <!-- Rendered items will appear here -->
+      </div>
+
+      <div class="cart-summary-box">
+        <div class="summary-line">
+          <span>Subtotal</span>
+          <span id="bill-subtotal">₹0.00</span>
+        </div>
+        <div class="summary-line">
+          <span>Taxes (GST 5% included)</span>
+          <span id="bill-tax">₹0.00</span>
+        </div>
+        <div class="summary-line total">
+          <span>Total Payable</span>
+          <span id="bill-total">₹0.00</span>
+        </div>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="btn-main btn-primary" onclick="checkoutBill()">Complete Sale (₹<span id="btn-pay-amount">0.00</span>)</button>
+        <button class="btn-main btn-outline" onclick="closeCartDrawer()">Resume Scanning</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* =========================================================================
+       1. LOCAL AUTHORITATIVE PRODUCT DATABASE (Indian Retail Catalog)
+       ========================================================================= */
+    const PRODUCT_CATALOG = {
+      '8901262010014': {
+        id: 'P101',
+        barcode: '8901262010014',
+        format: 'EAN-13',
+        name: 'Amul Taaza Fresh Toned Milk 1L',
+        price: 68.00,
+        mrp: 70.00,
+        stock: 24,
+        taxPercent: 0
+      },
+      '8901058852449': {
+        id: 'P102',
+        barcode: '8901058852449',
+        format: 'EAN-13',
+        name: 'Maggi 2-Minute Masala Noodles 70g',
+        price: 14.00,
+        mrp: 14.00,
+        stock: 150,
+        taxPercent: 12
+      },
+      '8901719101037': {
+        id: 'P103',
+        barcode: '8901719101037',
+        format: 'EAN-13',
+        name: 'Parle-G Original Gluco Biscuits 250g',
+        price: 25.00,
+        mrp: 25.00,
+        stock: 80,
+        taxPercent: 5
+      },
+      '5449000000996': {
+        id: 'P104',
+        barcode: '5449000000996',
+        format: 'EAN-13',
+        name: 'Coca-Cola Original Taste 750ml',
+        price: 40.00,
+        mrp: 40.00,
+        stock: 42,
+        taxPercent: 28
+      },
+      '8901233020000': {
+        id: 'P105',
+        barcode: '8901233020000',
+        format: 'EAN-13',
+        name: 'Tata Salt Vacuum Evaporated 1kg',
+        price: 28.00,
+        mrp: 28.00,
+        stock: 0, // Out of Stock test item
+        taxPercent: 0
+      }
+    };
+
+    // Supported Barcode Formats
+    const SUPPORTED_FORMATS = [
+      'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'
+    ];
+
+    /* =========================================================================
+       2. APPLICATION STATE
+       ========================================================================= */
+    const state = {
+      isOnline: true,
+      cameraActive: false,
+      facingMode: 'environment', // environment (rear) or user (front)
+      torchOn: false,
+      streamTrack: null,
+      videoElement: null,
+      barcodeDetector: null,
+      codeReader: null,          // ZXing fallback instance
+      scanLoopTimer: null,
+      isProcessing: false,
+      lastScannedBarcode: null,
+      lastScanTime: 0,
+      duplicateLockDuration: 2200, // Cooldown in ms to prevent accidental immediate double reads
+      cart: {},                    // { [barcode]: { product, qty } }
+      pendingOosProduct: null,
+      uiState: 'Initializing'      // One of the 12 defined POS states
+    };
+
+    /* Web Audio API for Cashier Sound Feedback (Zero external audio assets) */
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playBeep(type = 'success') {
+      try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        if (type === 'success') {
+          osc.frequency.setValueAtTime(1760, audioCtx.currentTime); // High crisp A6 note
+          gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.12);
+        } else if (type === 'error') {
+          osc.frequency.setValueAtTime(320, audioCtx.currentTime); // Low buzz
+          gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.3);
+        }
+      } catch (e) {
+        // Audio might be suppressed by browser autoplay policy before gesture
+      }
+    }
+
+    /* Haptic Feedback (Vibration) */
+    function triggerHaptic(type = 'success') {
+      if ('vibrate' in navigator) {
+        if (type === 'success') navigator.vibrate(60);
+        else if (type === 'error') navigator.vibrate([100, 50, 100]);
+      }
+    }
+
+    /* =========================================================================
+       3. CAMERA INITIALIZATION & PERMISSION HANDLING
+       ========================================================================= */
+    async function initCameraStream() {
+      closeAllModals();
+      setScannerState('Initializing Camera', '#94a3b8');
+
+      const video = document.getElementById('camera-feed');
+      state.videoElement = video;
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setScannerState('Camera Error', '#ef4444');
+        showPermissionDeniedModal('Camera API is not supported in this browser environment.');
+        return;
+      }
+
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: state.facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      };
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        state.streamTrack = stream.getVideoTracks()[0];
+        state.cameraActive = true;
+
+        await video.play();
+
+        // Check torch capability
+        checkTorchCapabilities();
+
+        setScannerState('Ready to Scan', '#10b981');
+        document.getElementById('laser-line').classList.remove('paused');
+
+        // Setup detector and start scanning engine
+        setupBarcodeEngine();
+      } catch (err) {
+        console.error('Camera stream access denied or failed:', err);
+        setScannerState('Camera Permission Required', '#f59e0b');
+        showPermissionDeniedModal(
+          err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError'
+            ? 'Camera permission has been blocked. Please enable camera access in your browser or phone system settings.'
+            : 'Could not activate camera device: ' + err.message
+        );
+      }
+    }
+
+    function checkTorchCapabilities() {
+      if (state.streamTrack) {
+        const capabilities = state.streamTrack.getCapabilities ? state.streamTrack.getCapabilities() : {};
+        const torchBtn = document.getElementById('btn-torch');
+        if (!capabilities.torch) {
+          torchBtn.style.opacity = '0.6';
+        }
+      }
+    }
+
+    async function toggleTorch() {
+      if (!state.streamTrack) return;
+      try {
+        const capabilities = state.streamTrack.getCapabilities ? state.streamTrack.getCapabilities() : {};
+        if (capabilities.torch) {
+          state.torchOn = !state.torchOn;
+          await state.streamTrack.applyConstraints({
+            advanced: [{ torch: state.torchOn }]
+          });
+          const btn = document.getElementById('btn-torch');
+          btn.classList.toggle('active', state.torchOn);
+        } else {
+          showToastTemporary('Flashlight torch not available on this device');
+        }
+      } catch (e) {
+        console.warn('Torch constraint toggle error:', e);
+      }
+    }
+
+    async function toggleCameraFacing() {
+      state.facingMode = state.facingMode === 'environment' ? 'user' : 'environment';
+      if (state.streamTrack) {
+        state.streamTrack.stop();
+      }
+      await initCameraStream();
+    }
+
+    function showPermissionDeniedModal(message) {
+      document.getElementById('perm-desc').textContent = message;
+      document.getElementById('modal-permission').classList.add('open');
+    }
+
+    /* =========================================================================
+       4. REAL-TIME CONTINUOUS BARCODE DETECTION ENGINE
+       ========================================================================= */
+    async function setupBarcodeEngine() {
+      // Check for native Shape Detection API (BarcodeDetector)
+      if ('BarcodeDetector' in window) {
+        try {
+          const supported = await BarcodeDetector.getSupportedFormats();
+          state.barcodeDetector = new BarcodeDetector({
+            formats: supported.length ? supported : ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code']
+          });
+        } catch (e) {
+          console.warn('Native BarcodeDetector init error, falling back to ZXing', e);
+          state.barcodeDetector = null;
+        }
+      }
+
+      // If no native BarcodeDetector, prepare ZXing MultiFormatReader
+      if (!state.barcodeDetector && window.ZXing) {
+        state.codeReader = new ZXing.BrowserMultiFormatReader();
+      }
+
+      startDetectionLoop();
+    }
+
+    function startDetectionLoop() {
+      if (state.scanLoopTimer) clearInterval(state.scanLoopTimer);
+
+      // Run inspection interval every 120ms (~8 FPS is optimal for real-time without CPU overheating)
+      state.scanLoopTimer = setInterval(async () => {
+        if (!state.cameraActive || state.isProcessing || !state.videoElement) return;
+        if (state.videoElement.readyState !== state.videoElement.HAVE_ENOUGH_DATA) return;
+
+        // Native BarcodeDetector Path
+        if (state.barcodeDetector) {
+          try {
+            const barcodes = await state.barcodeDetector.detect(state.videoElement);
+            if (barcodes && barcodes.length > 0) {
+              const detected = barcodes[0];
+              onBarcodeDetected(detected.rawValue, detected.format || 'EAN-13');
+            }
+          } catch (err) {
+            // Processing frame error, continue loop
+          }
+        } 
+        // ZXing Fallback Path
+        else if (state.codeReader) {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = state.videoElement.videoWidth;
+            canvas.height = state.videoElement.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(state.videoElement, 0, 0, canvas.width, canvas.height);
+
+            // Decode from in-memory canvas
+            const luminanceSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+            const binaryBitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminanceSource));
+            const reader = new ZXing.MultiFormatReader();
+            const result = reader.decode(binaryBitmap);
+
+            if (result && result.getText()) {
+              onBarcodeDetected(result.getText(), result.getBarcodeFormat() ? result.getBarcodeFormat().toString() : 'CODE-128');
+            }
+          } catch (e) {
+            // ZXing throws NotFoundException when frame has no barcode, perfectly normal
+          }
+        }
+      }, 120);
+    }
+
+    /* =========================================================================
+       5. DETECTION, DUPLICATE LOCK & WORKFLOW DISPATCHER
+       ========================================================================= */
+    function onBarcodeDetected(rawCode, formatName) {
+      if (!rawCode) return;
+      const cleanCode = rawCode.trim();
+      const now = Date.now();
+
+      // DUPLICATE SCAN PROTECTION:
+      // If the exact same barcode is seen continuously across camera frames, lock it for 2.2 seconds.
+      // After 2.2s, if the barcode is still scanned (or scanned again intentionally), allow incrementing quantity.
+      if (cleanCode === state.lastScannedBarcode && (now - state.lastScanTime < state.duplicateLockDuration)) {
+        return; // Ignore repetitive camera frame hits
+      }
+
+      state.lastScannedBarcode = cleanCode;
+      state.lastScanTime = now;
+
+      triggerBarcodeLookup(cleanCode, formatName);
+    }
+
+    function triggerBarcodeLookup(barcode, format = 'EAN-13') {
+      // 1. Freeze/lock detection briefly
+      state.isProcessing = true;
+      setScannerState('Detecting Barcode...', '#3b82f6');
+      flashViewfinder('success');
+
+      // 2. Validate Barcode
+      if (!barcode || barcode.length < 3) {
+        handleInvalidBarcode(barcode);
+        return;
+      }
+
+      // 3. Search Local Cache First, then Backend API
+      lookupProductInCatalog(barcode, format);
+    }
+
+    function lookupProductInCatalog(barcode, format) {
+      // Step A: Local Cache Search
+      let product = PRODUCT_CATALOG[barcode];
+
+      // Step B: If not in local cache and online, attempt backend query (simulated)
+      if (!product && state.isOnline) {
+        // Simulated network lookup fallback
+        console.log(`Querying store API for barcode ${barcode}...`);
+      }
+
+      // Handle Result States:
+      if (!product) {
+        // State 7: Product Not Found
+        handleProductNotFound(barcode);
+        return;
+      }
+
+      // State 8: Out of Stock Check
+      if (product.stock <= 0) {
+        handleOutOfStock(product);
+        return;
+      }
+
+      // State 5 & 6: Product Found -> Automatically Add to Cart
+      handleProductSuccess(product);
+    }
+
+    /* =========================================================================
+       6. POS CART OPERATIONS & CONFIRMATION
+       ========================================================================= */
+    function handleProductSuccess(product) {
+      playBeep('success');
+      triggerHaptic('success');
+      setScannerState('Product Found & Added', '#10b981');
+
+      // Add to Cart / Increment Quantity
+      if (state.cart[product.barcode]) {
+        state.cart[product.barcode].qty += 1;
+      } else {
+        state.cart[product.barcode] = {
+          product: product,
+          qty: 1
+        };
+      }
+
+      const currentQty = state.cart[product.barcode].qty;
+      updateCartDisplay();
+
+      // Show Compact Confirmation Sheet without taking cashier away from scanner
+      showResultSheet(product, currentQty);
+
+      // Resume scanning automatically after 1.8 seconds
+      setTimeout(() => {
+        hideResultSheet();
+        state.isProcessing = false;
+        setScannerState('Ready to Scan', '#10b981');
+      }, 1800);
+    }
+
+    function handleOutOfStock(product) {
+      playBeep('error');
+      triggerHaptic('error');
+      setScannerState('Out of Stock', '#ef4444');
+
+      state.pendingOosProduct = product;
+      document.getElementById('oos-desc').innerHTML = `<strong>${product.name}</strong><br>₹${product.price.toFixed(2)} — Available stock is 0.`;
+      document.getElementById('oos-product-box').textContent = `${product.name} (Barcode: ${product.barcode})`;
+      document.getElementById('modal-oos').classList.add('open');
+    }
+
+    function confirmAddOosAnyway() {
+      if (state.pendingOosProduct) {
+        const prod = state.pendingOosProduct;
+        state.pendingOosProduct = null;
+        closeModalAndResume('modal-oos');
+
+        if (state.cart[prod.barcode]) {
+          state.cart[prod.barcode].qty += 1;
+        } else {
+          state.cart[prod.barcode] = { product: prod, qty: 1 };
+        }
+        updateCartDisplay();
+        showToastTemporary(`Added ${prod.name} despite 0 stock (Manager Override)`);
+      }
+    }
+
+    function handleProductNotFound(barcode) {
+      playBeep('error');
+      triggerHaptic('error');
+      setScannerState('Product Not Found', '#f59e0b');
+
+      document.getElementById('nf-barcode-display').textContent = barcode;
+      document.getElementById('modal-not-found').classList.add('open');
+    }
+
+    function handleCreateProductFromUnknown() {
+      const barcode = document.getElementById('nf-barcode-display').textContent;
+      closeAllModals();
+
+      // Pre-fill barcode into manual creator
+      const newName = prompt(`Enter product name for barcode ${barcode}:`, 'New Retail Item');
+      if (newName) {
+        const newPrice = parseFloat(prompt(`Enter selling price (₹):`, '50.00')) || 50.00;
+        
+        // Add to authoritative catalog immediately
+        PRODUCT_CATALOG[barcode] = {
+          id: 'P' + Math.floor(Math.random() * 9000 + 1000),
+          barcode: barcode,
+          format: 'EAN-13',
+          name: newName,
+          price: newPrice,
+          mrp: newPrice,
+          stock: 50,
+          taxPercent: 5
+        };
+
+        showToastTemporary(`Product "${newName}" registered!`);
+        // Immediately add to cart
+        handleProductSuccess(PRODUCT_CATALOG[barcode]);
+      } else {
+        resumeScanning();
+      }
+    }
+
+    function handleInvalidBarcode(barcode) {
+      setScannerState('Invalid Barcode', '#ef4444');
+      setTimeout(() => {
+        state.isProcessing = false;
+        setScannerState('Ready to Scan', '#10b981');
+      }, 1200);
+    }
+
+    /* =========================================================================
+       7. UI RENDERING & RESULT PRESENTATION
+       ========================================================================= */
+    function showResultSheet(product, qty) {
+      const sheet = document.getElementById('result-sheet');
+      document.getElementById('result-pname').textContent = product.name;
+      document.getElementById('result-barcode-tag').textContent = product.barcode;
+      document.getElementById('result-pprice').textContent = `₹${product.price.toFixed(2)}`;
+      document.getElementById('result-pmrp').textContent = `MRP ₹${product.mrp.toFixed(2)}`;
+      document.getElementById('result-pstock').textContent = `Stock: ${product.stock}`;
+      document.getElementById('result-added-text').textContent = `✓ Added to Cart (Qty ${qty})`;
+
+      sheet.classList.add('visible');
+    }
+
+    function hideResultSheet() {
+      const sheet = document.getElementById('result-sheet');
+      sheet.classList.remove('visible');
+    }
+
+    function flashViewfinder(type = 'success') {
+      const vf = document.getElementById('viewfinder');
+      vf.classList.add('success-flash');
+      setTimeout(() => vf.classList.remove('success-flash'), 350);
+    }
+
+    function setScannerState(text, color = '#10b981') {
+      state.uiState = text;
+      const textElem = document.getElementById('status-text');
+      const ledElem = document.getElementById('status-led');
+      textElem.textContent = text;
+      ledElem.style.backgroundColor = color;
+    }
+
+    function updateCartDisplay() {
+      let totalQty = 0;
+      let totalAmount = 0;
+
+      Object.values(state.cart).forEach(item => {
+        totalQty += item.qty;
+        totalAmount += (item.product.price * item.qty);
+      });
+
+      document.getElementById('cart-item-count').textContent = totalQty;
+      document.getElementById('cart-total-amount').textContent = `₹${totalAmount.toFixed(2)}`;
+      document.getElementById('btn-pay-amount').textContent = totalAmount.toFixed(2);
+    }
+
+    function clearCart() {
+      if (Object.keys(state.cart).length === 0) return;
+      if (confirm('Clear all scanned items in the cart?')) {
+        state.cart = {};
+        updateCartDisplay();
+        showToastTemporary('Cart cleared');
+      }
+    }
+
+    /* =========================================================================
+       8. CART DRAWER & CHECKOUT
+       ========================================================================= */
+    function openCartDrawer() {
+      renderCartDrawerList();
+      document.getElementById('cart-drawer-modal').classList.add('open');
+    }
+
+    function closeCartDrawer() {
+      document.getElementById('cart-drawer-modal').classList.remove('open');
+    }
+
+    function onCartBackdropClick(e) {
+      if (e.target.id === 'cart-drawer-modal') closeCartDrawer();
+    }
+
+    function renderCartDrawerList() {
+      const container = document.getElementById('cart-items-container');
+      const items = Object.values(state.cart);
+
+      if (items.length === 0) {
+        container.innerHTML = `<div style="text-align:center; padding: 30px; color:#6b7280; font-size:14px;">No items scanned yet.<br>Point camera at a barcode to add.</div>`;
+        document.getElementById('bill-subtotal').textContent = '₹0.00';
+        document.getElementById('bill-tax').textContent = '₹0.00';
+        document.getElementById('bill-total').textContent = '₹0.00';
+        return;
+      }
+
+      let subtotal = 0;
+      let totalTax = 0;
+
+      container.innerHTML = items.map(item => {
+        const itemTotal = item.product.price * item.qty;
+        subtotal += itemTotal;
+        const itemTax = itemTotal * ((item.product.taxPercent || 0) / 100);
+        totalTax += itemTax;
+
+        return `
+          <div class="cart-item-row">
+            <div class="cart-item-details">
+              <h5>${item.product.name}</h5>
+              <p>₹${item.product.price.toFixed(2)} × ${item.qty} = <strong>₹${itemTotal.toFixed(2)}</strong></p>
+            </div>
+            <div class="qty-controls">
+              <button class="qty-btn" onclick="adjustItemQty('${item.product.barcode}', -1)">−</button>
+              <span class="qty-value">${item.qty}</span>
+              <button class="qty-btn" onclick="adjustItemQty('${item.product.barcode}', 1)">+</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      const totalBill = subtotal; // Assuming MRP/Selling price is GST inclusive as per Indian retail standard
+      document.getElementById('bill-subtotal').textContent = `₹${(totalBill - totalTax).toFixed(2)}`;
+      document.getElementById('bill-tax').textContent = `₹${totalTax.toFixed(2)}`;
+      document.getElementById('bill-total').textContent = `₹${totalBill.toFixed(2)}`;
+    }
+
+    function adjustItemQty(barcode, change) {
+      if (!state.cart[barcode]) return;
+      state.cart[barcode].qty += change;
+      if (state.cart[barcode].qty <= 0) {
+        delete state.cart[barcode];
+      }
+      updateCartDisplay();
+      renderCartDrawerList();
+    }
+
+    function checkoutBill() {
+      const count = Object.keys(state.cart).length;
+      if (count === 0) {
+        alert('Cart is empty. Scan products before checking out.');
+        return;
+      }
+      const total = document.getElementById('bill-total').textContent;
+      alert(`✅ Sale Completed!\nTotal: ${total}\nReceipt generated & stock updated.`);
+      state.cart = {};
+      updateCartDisplay();
+      closeCartDrawer();
+      resumeScanning();
+    }
+
+    /* =========================================================================
+       9. MANUAL BARCODE & MODAL CONTROLS
+       ========================================================================= */
+    function openManualInputModal() {
+      closeAllModals();
+      const input = document.getElementById('manual-barcode-input');
+      input.value = '';
+      document.getElementById('modal-manual').classList.add('open');
+      setTimeout(() => input.focus(), 200);
+    }
+
+    function submitManualBarcode() {
+      const code = document.getElementById('manual-barcode-input').value.trim();
+      if (!code) {
+        alert('Please enter a valid barcode number');
+        return;
+      }
+      closeAllModals();
+      triggerBarcodeLookup(code, 'MANUAL');
+    }
+
+    function closeAllModals() {
+      document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('open'));
+    }
+
+    function closeModalAndResume(modalId) {
+      document.getElementById(modalId).classList.remove('open');
+      resumeScanning();
+    }
+
+    function resumeScanning() {
+      state.isProcessing = false;
+      setScannerState('Ready to Scan', '#10b981');
+    }
+
+    /* =========================================================================
+       10. NETWORK & SYSTEM TOGGLES
+       ========================================================================= */
+    function toggleOnlineStatus() {
+      state.isOnline = !state.isOnline;
+      const badge = document.getElementById('net-badge');
+      const text = document.getElementById('net-text');
+
+      if (state.isOnline) {
+        badge.classList.remove('offline');
+        text.textContent = 'ONLINE';
+        setScannerState('Ready to Scan', '#10b981');
+        showToastTemporary('Switched to Cloud Synchronized Mode');
+      } else {
+        badge.classList.add('offline');
+        text.textContent = 'OFFLINE';
+        setScannerState('Offline Mode (Local Cache Active)', '#f59e0b');
+        showToastTemporary('Offline Mode: Authoritative Local Store Cache active');
+      }
+    }
+
+    function showToastTemporary(msg) {
+      const hint = document.getElementById('frame-hint');
+      const original = hint.innerHTML;
+      hint.innerHTML = `<span>ℹ️ ${msg}</span>`;
+      setTimeout(() => {
+        hint.innerHTML = original;
+      }, 2500);
+    }
+
+    function simulateCloseApp() {
+      if (confirm('Exit POS Scanner and return to cashier dashboard?')) {
+        if (state.streamTrack) state.streamTrack.stop();
+        document.body.innerHTML = `
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; text-align:center; padding:20px;">
+            <h2 style="margin-bottom:10px;">Scanner Closed</h2>
+            <p style="color:#9ca3af; margin-bottom:20px;">Cashier session remains saved.</p>
+            <button onclick="location.reload()" style="background:#10b981; color:#022c22; padding:12px 24px; border-radius:12px; font-weight:700; border:none; cursor:pointer;">
+              Reopen Scanner
+            </button>
+          </div>
+        `;
+      }
+    }
+
+    /* =========================================================================
+       11. LIFECYCLE AUTO-BOOTSTRAP
+       ========================================================================= */
+    window.addEventListener('DOMContentLoaded', () => {
+      // Auto-start camera on user access
+      initCameraStream();
+
+      // Monitor browser network state
+      window.addEventListener('online', () => {
+        state.isOnline = true;
+        document.getElementById('net-badge').classList.remove('offline');
+        document.getElementById('net-text').textContent = 'ONLINE';
+      });
+      window.addEventListener('offline', () => {
+        state.isOnline = false;
+        document.getElementById('net-badge').classList.add('offline');
+        document.getElementById('net-text').textContent = 'OFFLINE';
+      });
+    });
+  </script>
+</body>
+</html>
